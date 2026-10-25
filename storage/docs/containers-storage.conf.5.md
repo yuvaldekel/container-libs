@@ -118,6 +118,14 @@ The `storage.options.pull_options` table supports the following keys:
   It is an expensive operation so it is not enabled by default.
   This is a "string bool": "false"|"true" (cannot be native TOML boolean)
 
+**isolate_additional_image_stores="false"|"true"**
+  If set to "true", containers/storage will copy layers found in additional
+  image stores into the primary store instead of reusing them, so that pulled
+  images keep working if an additional image store is replaced by a version
+  without those layers (e.g. one shipped in a bootc image). It uses more disk
+  space, so it is not enabled by default.
+  This is a "string bool": "false"|"true" (cannot be native TOML boolean)
+
 **insecure_allow_unpredictable_image_contents="false"|"true"**
   This should _almost never_ be set.
   It allows partial pulls of images without guaranteeing that "partial

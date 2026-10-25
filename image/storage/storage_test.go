@@ -68,7 +68,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newStoreWithGraphDriverOptions(t *testing.T, options []string) storage.Store {
+func newStoreWithOptions(t *testing.T, options []string, pullOptions map[string]string) storage.Store {
 	wd := t.TempDir()
 	run := filepath.Join(wd, "run")
 	root := filepath.Join(wd, "root")
@@ -87,6 +87,7 @@ func newStoreWithGraphDriverOptions(t *testing.T, options []string) storage.Stor
 		GraphRoot:          root,
 		GraphDriverName:    "vfs",
 		GraphDriverOptions: options,
+		PullOptions:        pullOptions,
 		UIDMap:             Transport.DefaultUIDMap(),
 		GIDMap:             Transport.DefaultGIDMap(),
 	})
@@ -95,6 +96,10 @@ func newStoreWithGraphDriverOptions(t *testing.T, options []string) storage.Stor
 	}
 	Transport.SetStore(store)
 	return store
+}
+
+func newStoreWithGraphDriverOptions(t *testing.T, options []string) storage.Store {
+	return newStoreWithOptions(t, options, nil)
 }
 
 func newStore(t *testing.T) storage.Store {
@@ -736,6 +741,57 @@ func TestDuplicateBlob(t *testing.T) {
 	require.NoError(t, err)
 	err = img.Close()
 	require.NoError(t, err)
+}
+
+func TestIsolateAdditionalImageStores(t *testing.T) {
+	ensureTestCanCreateImages(t)
+
+	store := newStore(t)
+	cache := memory.New()
+
+	layer1 := makeLayer(t, archive.Gzip)
+	layer2 := makeLayer(t, archive.Gzip)
+	layerBlobs := []testBlob{layer1, layer2}
+	config := configForLayers(t, layerBlobs)
+
+	ref, err := Transport.ParseReference("test")
+	require.NoError(t, err)
+
+	createImage(t, ref, cache, layerBlobs, &config)
+	_, err = store.Shutdown(true)
+	require.NoError(t, err)
+
+	// Use a copy, this process has the lock files of the original open for writing.
+	imageStore := filepath.Join(t.TempDir(), "imagestore")
+	err = os.CopyFS(imageStore, os.DirFS(store.GraphRoot()))
+	require.NoError(t, err)
+
+	store = newStoreWithOptions(t, []string{"vfs.imagestore=" + imageStore},
+		map[string]string{"isolate_additional_image_stores": "true"})
+
+	layer3 := makeLayer(t, archive.Gzip)
+	layerBlobs = []testBlob{layer1, layer3}
+	config = configForLayers(t, layerBlobs)
+
+	ref, err = Transport.ParseReference("test2")
+	require.NoError(t, err)
+
+	createImage(t, ref, cache, layerBlobs, &config)
+	layers, err := store.Layers()
+	require.NoError(t, err)
+	createImage(t, ref, cache, layerBlobs, &config)
+	layers2, err := store.Layers()
+	require.NoError(t, err)
+	assert.Len(t, layers2, len(layers))
+
+	img, err := Transport.GetStoreImage(store, ref)
+	require.NoError(t, err)
+	for id := img.TopLayer; id != ""; {
+		layer, err := store.Layer(id)
+		require.NoError(t, err)
+		assert.False(t, layer.ReadOnly)
+		id = layer.Parent
+	}
 }
 
 type unparsedImage struct {

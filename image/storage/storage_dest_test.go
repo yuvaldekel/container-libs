@@ -103,3 +103,10 @@ func TestLayerID(t *testing.T) {
 		assert.Equal(t, c.expected, res)
 	}
 }
+
+func TestAdditionalImageStoreCopyLayerID(t *testing.T) {
+	id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	res := additionalImageStoreCopyLayerID(id)
+	assert.Equal(t, "cb68db0c20fd6e7e4aea1c104c728309fa5c63fac3ed4b80cc48815350255167", res)
+	assert.NotEqual(t, id, res)
+}

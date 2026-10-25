@@ -69,6 +69,8 @@ type storageImageDestination struct {
 	signatureses          map[digest.Digest][]byte // Instance signature contents, temporary
 	metadata              storageImageMetadata     // Metadata contents being built
 
+	isolateAdditionalImageStores bool // See isolate_additional_image_stores in containers-storage.conf(5)
+
 	// Mapping from layer (by index) to the associated ID in the storage.
 	// It's protected *implicitly* since `commitLayer()`, at any given
 	// time, can only be executed by *one* goroutine.  Please refer to
@@ -171,7 +173,8 @@ func newImageDestination(sys *types.SystemContext, imageRef storageReference) (*
 			SignatureSizes:  []int{},
 			SignaturesSizes: make(map[digest.Digest][]int),
 		},
-		indexToStorageID: make(map[int]string),
+		isolateAdditionalImageStores: strings.ToLower(imageRef.transport.store.PullOptions()["isolate_additional_image_stores"]) == "true",
+		indexToStorageID:             make(map[int]string),
 		lockProtected: storageImageDestinationLockProtected{
 			indexToAddedLayerInfo: make(map[int]addedLayerInfo),
 
@@ -1039,10 +1042,19 @@ func (s *storageImageDestination) commitLayer(index int, info addedLayerInfo, si
 
 	id := layerID(parentLayer, trusted)
 
-	if layer, err2 := s.imageRef.transport.store.Layer(id); layer != nil && err2 == nil {
-		// There's already a layer that should have the right contents, just reuse it.
-		s.indexToStorageID[index] = layer.ID
-		return false, nil
+	for {
+		layer, err2 := s.imageRef.transport.store.Layer(id)
+		if layer == nil || err2 != nil {
+			break
+		}
+		if !layer.ReadOnly || !s.isolateAdditionalImageStores {
+			// There's already a layer that should have the right contents, just reuse it.
+			s.indexToStorageID[index] = layer.ID
+			return false, nil
+		}
+		// An additional image store might be replaced by a version without this layer; use our own copy.
+		logrus.Debugf("Layer %q is in an additional image store, creating a copy", id)
+		id = additionalImageStoreCopyLayerID(id)
 	}
 
 	layer, err := s.createNewLayer(index, trusted, parentLayer, id)
@@ -1054,6 +1066,13 @@ func (s *storageImageDestination) commitLayer(index int, info addedLayerInfo, si
 	}
 	s.indexToStorageID[index] = layer.ID
 	return false, nil
+}
+
+// additionalImageStoreCopyLayerID computes the ID of a primary store copy of layer id from an additional image store.
+// It must differ from id: graph drivers would otherwise find the additional image store’s layer while creating the copy.
+func additionalImageStoreCopyLayerID(id string) string {
+	// "@" is not a valid start of a digest.Digest.Encoded(), so this is unambiguous with layerID values.
+	return digest.Canonical.FromString(id + "+@primary-store-copy").Encoded()
 }
 
 // layerID computes a layer (“chain”) ID for (a possibly-empty parentID, trusted)
